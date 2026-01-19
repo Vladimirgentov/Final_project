@@ -1,0 +1,20 @@
+name: docker-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  docker-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure scripts are executable
+        run: |
+          chmod +x scripts/prepare.sh scripts/tests.sh
+
+      - name: Run docker-based tests
+        run: |
+          ./scripts/tests.sh
