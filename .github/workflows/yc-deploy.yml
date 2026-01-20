@@ -10,7 +10,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Debug workflow identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Workflow: $GITHUB_WORKFLOW"
+          echo "Job: $GITHUB_JOB"
+          echo "Ref: $GITHUB_REF"
+          echo "SHA: $GITHUB_SHA"
 
       - name: Load .env.yc
         shell: bash
@@ -50,13 +60,23 @@ jobs:
           echo "SSH_PUBLIC_KEY=$HOME/.ssh/cloudlink_rsa.pub" >> "$GITHUB_ENV"
 
       - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y jq
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq unzip curl
 
       - name: Ensure scripts executable
-        run: chmod +x scripts/prepare.sh scripts/run.sh scripts/tests.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/prepare.sh scripts/run.sh scripts/tests.sh
 
       - name: Build Docker image
-        run: ./scripts/prepare.sh :contentReference[oaicite:1]{index=1}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/prepare.sh
 
       - name: Create VM + deploy
         shell: bash
@@ -66,13 +86,15 @@ jobs:
           echo "VM_IP=$IP" >> "$GITHUB_ENV"
           echo "VM IP: $IP"
 
-
       - name: Run API tests on VM
         shell: bash
         run: |
           set -euo pipefail
           export BASE_URL="http://${VM_IP}:8080"
-          ./scripts/tests.sh :contentReference[oaicite:3]{index=3}
+          ./scripts/tests.sh
 
       - name: Result
-        run: echo "Deployed to http://${VM_IP}:8080"
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Deployed to http://${VM_IP}:8080"
