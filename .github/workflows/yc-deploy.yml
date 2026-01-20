@@ -18,11 +18,12 @@ jobs:
           set -euo pipefail
           sed -E 's/^\s*export\s+//' .env.yc | grep -vE '^\s*#' | grep -vE '^\s*$' >> "$GITHUB_ENV"
 
-      - name: Install yc cli
+      - name: Install yc cli (no sudo)
         shell: bash
         run: |
           set -euo pipefail
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /usr/local
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i "$HOME/yandex-cloud"
+          echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
           yc version
 
       - name: Auth yc cli with service account key
