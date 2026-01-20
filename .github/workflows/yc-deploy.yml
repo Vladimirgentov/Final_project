@@ -59,14 +59,19 @@ jobs:
           yc config set folder-id "$YC_FOLDER_ID"
           yc config list
 
-      - name: Prepare SSH keys (derive public from private)
+      - name: Prepare SSH keys (safe write)
         shell: bash
+        env:
+          SSH_PRIVATE_KEY_SECRET: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
 
 
-          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          printf "%s" "$SSH_PRIVATE_KEY_SECRET" > ~/.ssh/deploy_key
+          # Убираем CR (Windows)
+          tr -d '\r' < ~/.ssh/deploy_key > ~/.ssh/deploy_key.tmp
+          mv ~/.ssh/deploy_key.tmp ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
 
@@ -75,6 +80,7 @@ jobs:
 
           echo "SSH_PRIVATE_KEY=$HOME/.ssh/deploy_key" >> "$GITHUB_ENV"
           echo "SSH_PUBLIC_KEY=$HOME/.ssh/deploy_key.pub" >> "$GITHUB_ENV"
+
 
     
       - name: Debug SSH public key
