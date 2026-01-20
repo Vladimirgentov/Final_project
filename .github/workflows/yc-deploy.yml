@@ -64,12 +64,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/cloudlink_rsa
-          echo "${{ secrets.SSH_PUBLIC_KEY }}"  > ~/.ssh/cloudlink_rsa.pub
-          chmod 600 ~/.ssh/cloudlink_rsa
-          chmod 644 ~/.ssh/cloudlink_rsa.pub
-          echo "SSH_PRIVATE_KEY=$HOME/.ssh/cloudlink_rsa" >> "$GITHUB_ENV"
-          echo "SSH_PUBLIC_KEY=$HOME/.ssh/cloudlink_rsa.pub" >> "$GITHUB_ENV"
+
+
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+
+          printf "%s" "${{ secrets.SSH_PUBLIC_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key.pub
+          chmod 644 ~/.ssh/deploy_key.pub
+
+          echo "SSH_PRIVATE_KEY=$HOME/.ssh/deploy_key" >> "$GITHUB_ENV"
+          echo "SSH_PUBLIC_KEY=$HOME/.ssh/deploy_key.pub" >> "$GITHUB_ENV"
+    
+      - name: Debug SSH public key
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Public key (first 120 chars):"
+          head -c 120 ~/.ssh/deploy_key.pub; echo
+          echo "Fingerprint:"
+          ssh-keygen -lf ~/.ssh/deploy_key.pub
+    
 
       - name: Install deps
         shell: bash

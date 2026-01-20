@@ -57,7 +57,7 @@ yc vpc security-group update-rules "${SG_ID}" \
 set -e
 
 echo "==> Create VM if missing"
-PUB_KEY="$(cat "${SSH_PUBLIC_KEY}")"
+PUB_KEY="$(tr -d '\r' < "${SSH_PUBLIC_KEY}")"
 TMP_USERDATA="$(mktemp)"
 cat > "${TMP_USERDATA}" <<EOF
 #cloud-config
@@ -67,7 +67,7 @@ users:
     shell: /bin/bash
     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     ssh_authorized_keys:
-      - ${PUB_KEY}
+      - "${PUB_KEY}"
 package_update: true
 EOF
 
