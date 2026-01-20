@@ -1,0 +1,44 @@
+services:
+  db:
+    # Use a stable Postgres image that is widely available in CI.
+    image: postgres:15
+    container_name: project-sem1-postgres
+    environment:
+      POSTGRES_USER: validator
+      POSTGRES_PASSWORD: val1dat0r
+      POSTGRES_DB: project-sem-1
+
+    ports:
+      - "5432:5432"
+
+
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/10-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U validator -d project-sem-1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    container_name: prices-service
+    environment:
+      HTTP_ADDR: ":8080"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: validator
+      POSTGRES_PASSWORD: val1dat0r
+      POSTGRES_DB: project-sem-1
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    ports:
+      - "8080:8080"
+
+volumes:
+  db_data:

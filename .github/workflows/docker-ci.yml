@@ -15,6 +15,31 @@ jobs:
         run: |
           chmod +x scripts/prepare.sh scripts/tests.sh
 
-      - name: Run docker-based tests
+      - name: Build Docker image (prepare.sh)
+        run: |
+          ./scripts/prepare.sh
+
+      - name: Start service via Docker Compose
+        run: |
+          docker compose up -d --build
+
+      - name: Wait for healthcheck
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Service did not become healthy" >&2
+          docker compose logs --no-color || true
+          exit 1
+
+      - name: Run API tests (tests.sh)
         run: |
           ./scripts/tests.sh
+
+      - name: Shutdown
+        if: always()
+        run: |
+          docker compose down -v
