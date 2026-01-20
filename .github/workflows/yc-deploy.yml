@@ -59,22 +59,23 @@ jobs:
           yc config set folder-id "$YC_FOLDER_ID"
           yc config list
 
-      - name: Prepare SSH keys files
+      - name: Prepare SSH keys (derive public from private)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
 
 
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
 
-          printf "%s" "${{ secrets.SSH_PUBLIC_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key.pub
+          ssh-keygen -y -f ~/.ssh/deploy_key > ~/.ssh/deploy_key.pub
           chmod 644 ~/.ssh/deploy_key.pub
 
           echo "SSH_PRIVATE_KEY=$HOME/.ssh/deploy_key" >> "$GITHUB_ENV"
           echo "SSH_PUBLIC_KEY=$HOME/.ssh/deploy_key.pub" >> "$GITHUB_ENV"
+
     
       - name: Debug SSH public key
         shell: bash
