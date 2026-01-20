@@ -16,13 +16,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # поддержим оба формата: с export и без
           sed -E 's/^\s*export\s+//' .env.yc | grep -vE '^\s*#' | grep -vE '^\s*$' >> "$GITHUB_ENV"
 
       - name: Install yc cli
-        uses: okar1/yc-cli-install@master
-        with:
-          SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /usr/local
+          yc version
+
+      - name: Auth yc cli with service account key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/yandex-cloud
+          echo '${{ secrets.YC_SA_KEY_JSON }}' > ~/.config/yandex-cloud/sa-key.json
+          yc config set service-account-key ~/.config/yandex-cloud/sa-key.json
+          yc config set cloud-id "$YC_CLOUD_ID"
+          yc config set folder-id "$YC_FOLDER_ID"
+          yc config list
 
       - name: Prepare SSH keys files
         shell: bash
@@ -33,20 +45,19 @@ jobs:
           echo "${{ secrets.SSH_PUBLIC_KEY }}"  > ~/.ssh/cloudlink_rsa.pub
           chmod 600 ~/.ssh/cloudlink_rsa
           chmod 644 ~/.ssh/cloudlink_rsa.pub
-
           echo "SSH_PRIVATE_KEY=$HOME/.ssh/cloudlink_rsa" >> "$GITHUB_ENV"
           echo "SSH_PUBLIC_KEY=$HOME/.ssh/cloudlink_rsa.pub" >> "$GITHUB_ENV"
 
-      - name: Install deps for run.sh
+      - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Ensure scripts executable
         run: chmod +x scripts/prepare.sh scripts/run.sh scripts/tests.sh
 
-      - name: Build Docker image (prepare.sh)
-        run: ./scripts/prepare.sh
+      - name: Build Docker image
+        run: ./scripts/prepare.sh :contentReference[oaicite:1]{index=1}
 
-      - name: Create VM + deploy (run.sh)
+      - name: Create VM + deploy
         shell: bash
         run: |
           set -euo pipefail
@@ -54,12 +65,13 @@ jobs:
           echo "VM_IP=$IP" >> "$GITHUB_ENV"
           echo "VM IP: $IP"
 
+
       - name: Run API tests on VM
         shell: bash
         run: |
           set -euo pipefail
           export BASE_URL="http://${VM_IP}:8080"
-          ./scripts/tests.sh
+          ./scripts/tests.sh :contentReference[oaicite:3]{index=3}
 
       - name: Result
         run: echo "Deployed to http://${VM_IP}:8080"
