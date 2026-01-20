@@ -1,9 +1,9 @@
 name: YC create VM and deploy
 
 on:
-  workflow_dispatch:
   push:
     branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -13,42 +13,53 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Load .env.yc
+        shell: bash
         run: |
-          grep -vE '^\s*#' .env.yc | grep -vE '^\s*$' >> "$GITHUB_ENV"
+          set -euo pipefail
+          # поддержим оба формата: с export и без
+          sed -E 's/^\s*export\s+//' .env.yc | grep -vE '^\s*#' | grep -vE '^\s*$' >> "$GITHUB_ENV"
 
       - name: Install yc cli
         uses: okar1/yc-cli-install@master
         with:
           SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
 
-      - name: Prepare SSH keys
+      - name: Prepare SSH keys files
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
-          chmod 600 ~/.ssh/id_ed25519
-          chmod 644 ~/.ssh/id_ed25519.pub
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/cloudlink_rsa
+          echo "${{ secrets.SSH_PUBLIC_KEY }}"  > ~/.ssh/cloudlink_rsa.pub
+          chmod 600 ~/.ssh/cloudlink_rsa
+          chmod 644 ~/.ssh/cloudlink_rsa.pub
 
-      - name: Install deps
+          echo "SSH_PRIVATE_KEY=$HOME/.ssh/cloudlink_rsa" >> "$GITHUB_ENV"
+          echo "SSH_PUBLIC_KEY=$HOME/.ssh/cloudlink_rsa.pub" >> "$GITHUB_ENV"
+
+      - name: Install deps for run.sh
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Build Docker image
+      - name: Ensure scripts executable
+        run: chmod +x scripts/prepare.sh scripts/run.sh scripts/tests.sh
+
+      - name: Build Docker image (prepare.sh)
         run: ./scripts/prepare.sh
 
-      - name: Create VM and deploy
-        id: deploy
+      - name: Create VM + deploy (run.sh)
+        shell: bash
         run: |
-          export SSH_PRIVATE_KEY="$HOME/.ssh/id_ed25519"
-          export SSH_PUBLIC_KEY="$HOME/.ssh/id_ed25519.pub"
-
+          set -euo pipefail
           IP="$(./scripts/run.sh | tail -n 1)"
-          echo "VM_IP=$IP" >> $GITHUB_ENV
-          echo "VM_IP=$IP"
+          echo "VM_IP=$IP" >> "$GITHUB_ENV"
+          echo "VM IP: $IP"
 
       - name: Run API tests on VM
+        shell: bash
         run: |
+          set -euo pipefail
           export BASE_URL="http://${VM_IP}:8080"
           ./scripts/tests.sh
 
       - name: Result
-        run: echo "Service deployed to http://${VM_IP}:8080"
+        run: echo "Deployed to http://${VM_IP}:8080"
