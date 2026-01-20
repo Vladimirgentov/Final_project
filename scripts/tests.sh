@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 ZIP_FILE="${ZIP_FILE:-sample_data.zip}"
 
