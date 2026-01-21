@@ -76,27 +76,6 @@ jobs:
           echo "SSH_PRIVATE_KEY=$HOME/.ssh/deploy_key" >> "$GITHUB_ENV"
           echo "SSH_PUBLIC_KEY=$HOME/.ssh/deploy_key.pub" >> "$GITHUB_ENV"
 
-      - name: Debug SSH key file
-        shell: bash
-        run: |
-          set -euo pipefail
-          wc -c ~/.ssh/deploy_key
-          head -n 1 ~/.ssh/deploy_key
-          tail -n 1 ~/.ssh/deploy_key
-          ssh-keygen -lf ~/.ssh/deploy_key.pub
-
-
-    
-      - name: Debug SSH public key
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Public key (first 120 chars):"
-          head -c 120 ~/.ssh/deploy_key.pub; echo
-          echo "Fingerprint:"
-          ssh-keygen -lf ~/.ssh/deploy_key.pub
-    
-
       - name: Install deps
         shell: bash
         run: |
