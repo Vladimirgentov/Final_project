@@ -33,6 +33,7 @@ need_cmd ssh
 need_cmd scp
 need_cmd tar
 need_cmd jq
+need_cmd curl
 
 echo "==> Configure yc profile"
 yc config set cloud-id "${YC_CLOUD_ID}" >/dev/null
@@ -47,7 +48,7 @@ if [[ -z "${SG_ID}" || "${SG_ID}" == "null" ]]; then
   SG_ID="$(yc vpc security-group create --name "${SG_NAME}" --network-id "${NET_ID}" --format json | jq -r '.id')"
 fi
 
-# try add rules (idempotency depends on backend; if duplicates error appears, we will handle after)
+# Try add rules (idempotency depends on backend; ignore errors)
 set +e
 yc vpc security-group update-rules "${SG_ID}" \
   --add-rule "direction=ingress,protocol=tcp,port=22,v4-cidrs=[0.0.0.0/0]" \
@@ -103,19 +104,52 @@ done
 echo "==> Install Docker + Compose plugin if missing"
 ssh ${SSH_OPTS} "${VM_USER}@${PUBLIC_IP}" 'bash -s' <<'REMOTE'
 set -euo pipefail
+
+wait_for_apt() {
+  echo "Waiting for apt/dpkg locks to be released..."
+  for i in $(seq 1 120); do
+    if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+      sleep 2; continue
+    fi
+    if sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1; then
+      sleep 2; continue
+    fi
+    if sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+      sleep 2; continue
+    fi
+    if sudo fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
+      sleep 2; continue
+    fi
+    echo "Apt locks are free."
+    return 0
+  done
+  echo "Timeout waiting for apt locks."
+  return 1
+}
+
 if ! command -v docker >/dev/null 2>&1; then
+  wait_for_apt
   sudo apt-get update -y
+
+  wait_for_apt
   sudo apt-get install -y ca-certificates curl gnupg
+
   sudo install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
   echo \
     "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
     $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
     sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+  wait_for_apt
   sudo apt-get update -y
+
+  wait_for_apt
   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
+
 sudo systemctl enable --now docker || true
 sudo docker version >/dev/null
 sudo docker compose version >/dev/null
