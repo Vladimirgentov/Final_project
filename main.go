@@ -29,18 +29,19 @@ type PostResponse struct {
 	DuplicatesCount int `json:"duplicates_count"`
 	TotalItems      int `json:"total_items"`
 	TotalCategories int `json:"total_categories"`
-	TotalPrice      int `json:"total_price"`
+	TotalPrice      int `json:"total_price"` // сумма в минимальных единицах (cents)
 }
+
 type PriceRow struct {
-	ProductID string
+	ProductID string // "id" из входного CSV; НЕ является первичным ключом в БД
 	CreatedAt string
 	Name      string
 	Category  string
-	Price     int
+	Price     int // cents
 }
 
 type DBRow struct {
-	ProductID string
+	ID        int64
 	Name      string
 	Category  string
 	Price     int
@@ -48,8 +49,12 @@ type DBRow struct {
 }
 
 func main() {
-	db := connectDB()
-	defer db.Close()
+	db, err := connectDB()
+	if err != nil {
+		log.Printf("db connect: %v", err)
+		return
+	}
+	defer func() { _ = db.Close() }()
 
 	mux := http.NewServeMux()
 
@@ -74,10 +79,14 @@ func main() {
 
 	addr := env("HTTP_ADDR", ":8080")
 	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	if err := http.ListenAndServe(addr, mux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Не используем log.Fatal, чтобы не обходить defer.
+		log.Printf("http server: %v", err)
+		return
+	}
 }
 
-func connectDB() *sql.DB {
+func connectDB() (*sql.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		env("POSTGRES_HOST", "127.0.0.1"),
@@ -89,7 +98,7 @@ func connectDB() *sql.DB {
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		log.Fatalf("db open: %v", err)
+		return nil, fmt.Errorf("db open: %w", err)
 	}
 
 	db.SetMaxOpenConns(10)
@@ -97,9 +106,10 @@ func connectDB() *sql.DB {
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
-		log.Fatalf("db ping: %v", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("db ping: %w", err)
 	}
-	return db
+	return db, nil
 }
 
 // ------------------------- POST -------------------------
@@ -205,9 +215,11 @@ func ingestCSV(ctx context.Context, db *sql.DB, csvStream io.Reader) (PostRespon
 		totalCount      int
 		duplicatesCount int
 		totalItems      int
-		seen            = make(map[string]struct{})
+		seenInFile      = make(map[string]struct{})
+		toInsert        []PriceRow
 	)
 
+	// 1) Считываем CSV целиком, валидируем и считаем дубликаты в самом файле.
 	for {
 		rec, err := cr.Read()
 		if err == io.EOF {
@@ -220,6 +232,7 @@ func ingestCSV(ctx context.Context, db *sql.DB, csvStream io.Reader) (PostRespon
 		totalCount++
 
 		if len(rec) != 5 {
+			// В исходном проекте некорректные строки учитывались как "duplicates".
 			duplicatesCount++
 			continue
 		}
@@ -246,34 +259,50 @@ func ingestCSV(ctx context.Context, db *sql.DB, csvStream io.Reader) (PostRespon
 			continue
 		}
 
-		key := productID + "|" + createdAt + "|" + name + "|" + category + "|" + strconv.Itoa(price)
-		if _, ok := seen[key]; ok {
+		// Дубликат = совпадает по всем полям, кроме id. Поэтому ключ НЕ включает productID.
+		key := createdAt + "|" + name + "|" + category + "|" + strconv.Itoa(price)
+		if _, ok := seenInFile[key]; ok {
 			duplicatesCount++
 			continue
 		}
-		seen[key] = struct{}{}
+		seenInFile[key] = struct{}{}
 
-		inserted, err := insertPrice(ctx, db, PriceRow{
+		toInsert = append(toInsert, PriceRow{
 			ProductID: productID,
 			CreatedAt: createdAt,
 			Name:      name,
 			Category:  category,
 			Price:     price,
 		})
+	}
+
+	// 2) Вставка + статистика — строго в одной транзакции.
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return PostResponse{}, errors.New("db begin failed")
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, r := range toInsert {
+		inserted, err := insertPrice(ctx, tx, r)
 		if err != nil {
 			return PostResponse{}, errors.New("db insert failed")
 		}
 		if !inserted {
+			// Дубликат уже в БД (или конфликт по уникальному ключу "кроме id").
 			duplicatesCount++
 			continue
 		}
-
 		totalItems++
 	}
 
-	totalCategories, totalPrice, err := stats(ctx, db)
+	totalCategories, totalPrice, err := stats(ctx, tx)
 	if err != nil {
 		return PostResponse{}, errors.New("db stats failed")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return PostResponse{}, errors.New("db commit failed")
 	}
 
 	return PostResponse{
@@ -299,13 +328,18 @@ func parsePriceToCents(s string) (int, error) {
 	return cents, nil
 }
 
-func insertPrice(ctx context.Context, db *sql.DB, r PriceRow) (inserted bool, err error) {
+// insertPrice вставляет запись. В качестве "id" в БД используется авто-генерируемый ключ,
+// поэтому входной ProductID (из CSV) не вставляется в id; при желании можно хранить его
+// в отдельном столбце product_id, но наружу (GET) его не возвращаем.
+func insertPrice(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, r PriceRow) (inserted bool, err error) {
 	const q = `
 		INSERT INTO prices (product_id, created_at, name, category, price)
 		VALUES ($1, $2::date, $3, $4, $5)
-		ON CONFLICT DO NOTHING;
+		ON CONFLICT (created_at, name, category, price) DO NOTHING;
 	`
-	res, err := db.ExecContext(ctx, q, r.ProductID, r.CreatedAt, r.Name, r.Category, r.Price)
+	res, err := execer.ExecContext(ctx, q, r.ProductID, r.CreatedAt, r.Name, r.Category, r.Price)
 	if err != nil {
 		return false, err
 	}
@@ -316,11 +350,13 @@ func insertPrice(ctx context.Context, db *sql.DB, r PriceRow) (inserted bool, er
 	return n == 1, nil
 }
 
-func stats(ctx context.Context, db *sql.DB) (totalCategories int, totalPrice int, err error) {
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT category) FROM prices;`).Scan(&totalCategories); err != nil {
-		return 0, 0, err
-	}
-	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(price),0) FROM prices;`).Scan(&totalPrice); err != nil {
+func stats(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (totalCategories int, totalPrice int, err error) {
+	if err := q.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT category), COALESCE(SUM(price),0)
+		FROM prices;
+	`).Scan(&totalCategories, &totalPrice); err != nil {
 		return 0, 0, err
 	}
 	return totalCategories, totalPrice, nil
@@ -337,47 +373,62 @@ func handlePricesGet(db *sql.DB) http.HandlerFunc {
 		minStr := strings.TrimSpace(r.URL.Query().Get("min"))
 		maxStr := strings.TrimSpace(r.URL.Query().Get("max"))
 
-		if startStr == "" || endStr == "" || minStr == "" || maxStr == "" {
-			http.Error(w, "missing query params", http.StatusBadRequest)
-			return
+		// Параметры могут приходить в любой комбинации. Формируем WHERE динамически.
+		where := make([]string, 0, 4)
+		args := make([]any, 0, 4)
+		argN := 1
+
+		if startStr != "" {
+			startDate, err := time.Parse("2006-01-02", startStr)
+			if err != nil {
+				http.Error(w, "invalid start", http.StatusBadRequest)
+				return
+			}
+			where = append(where, fmt.Sprintf("created_at >= $%d", argN))
+			args = append(args, startDate)
+			argN++
+		}
+		if endStr != "" {
+			endDate, err := time.Parse("2006-01-02", endStr)
+			if err != nil {
+				http.Error(w, "invalid end", http.StatusBadRequest)
+				return
+			}
+			where = append(where, fmt.Sprintf("created_at <= $%d", argN))
+			args = append(args, endDate)
+			argN++
+		}
+		if minStr != "" {
+			minCents, err := parsePriceToCents(minStr)
+			if err != nil {
+				http.Error(w, "invalid min", http.StatusBadRequest)
+				return
+			}
+			where = append(where, fmt.Sprintf("price >= $%d", argN))
+			args = append(args, minCents)
+			argN++
+		}
+		if maxStr != "" {
+			maxCents, err := parsePriceToCents(maxStr)
+			if err != nil {
+				http.Error(w, "invalid max", http.StatusBadRequest)
+				return
+			}
+			where = append(where, fmt.Sprintf("price <= $%d", argN))
+			args = append(args, maxCents)
+			argN++
 		}
 
-		startDate, err := time.Parse("2006-01-02", startStr)
-		if err != nil {
-			http.Error(w, "invalid start", http.StatusBadRequest)
-			return
-		}
-		endDate, err := time.Parse("2006-01-02", endStr)
-		if err != nil {
-			http.Error(w, "invalid end", http.StatusBadRequest)
-			return
-		}
-
-		minInt, err := strconv.Atoi(minStr)
-		if err != nil || minInt <= 0 {
-			http.Error(w, "invalid min", http.StatusBadRequest)
-			return
-		}
-		maxInt, err := strconv.Atoi(maxStr)
-		if err != nil || maxInt <= 0 {
-			http.Error(w, "invalid max", http.StatusBadRequest)
-			return
-		}
-		if minInt > maxInt {
-			http.Error(w, "min > max", http.StatusBadRequest)
-			return
-		}
-
-		minCents := minInt * 100
-		maxCents := maxInt * 100
-
-		rows, err := db.QueryContext(ctx, `
-			SELECT product_id, name, category, price, created_at
+		q := `
+			SELECT id, name, category, price, created_at
 			FROM prices
-			WHERE created_at >= $1 AND created_at <= $2
-			  AND price >= $3 AND price <= $4
-			ORDER BY created_at, product_id;
-		`, startDate, endDate, minCents, maxCents)
+		`
+		if len(where) > 0 {
+			q += " WHERE " + strings.Join(where, " AND ")
+		}
+		q += " ORDER BY created_at, id;"
+
+		rows, err := db.QueryContext(ctx, q, args...)
 		if err != nil {
 			http.Error(w, "db query failed", http.StatusInternalServerError)
 			return
@@ -387,7 +438,7 @@ func handlePricesGet(db *sql.DB) http.HandlerFunc {
 		var data []DBRow
 		for rows.Next() {
 			var rr DBRow
-			if err := rows.Scan(&rr.ProductID, &rr.Name, &rr.Category, &rr.Price, &rr.CreatedAt); err != nil {
+			if err := rows.Scan(&rr.ID, &rr.Name, &rr.Category, &rr.Price, &rr.CreatedAt); err != nil {
 				http.Error(w, "db scan failed", http.StatusInternalServerError)
 				return
 			}
@@ -432,7 +483,7 @@ func buildZipCSV(rows []DBRow) ([]byte, error) {
 
 	for _, r := range rows {
 		rec := []string{
-			r.ProductID,
+			strconv.FormatInt(r.ID, 10),
 			r.Name,
 			r.Category,
 			formatCents(r.Price),
