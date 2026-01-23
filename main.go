@@ -163,21 +163,43 @@ func openCSVFromZipBytes(zipBytes []byte) (io.ReadCloser, error) {
 		return nil, errors.New("invalid zip archive")
 	}
 
-	for _, f := range zr.File {
+	var anyCSV *zip.File
 
-		if strings.EqualFold(path.Base(f.Name), "data.csv") {
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		base := path.Base(f.Name)
+
+		if strings.EqualFold(base, "data.csv") {
 			rc, err := f.Open()
 			if err != nil {
 				return nil, errors.New("failed to open data.csv")
 			}
 			return rc, nil
 		}
+
+		if anyCSV == nil && strings.HasSuffix(strings.ToLower(base), ".csv") {
+			anyCSV = f
+		}
 	}
+
+	if anyCSV != nil {
+		rc, err := anyCSV.Open()
+		if err != nil {
+			return nil, errors.New("failed to open csv")
+		}
+		return rc, nil
+	}
+
 	return nil, errors.New("data.csv not found in archive")
 }
 
 func openCSVFromTarBytes(tarBytes []byte) (io.ReadCloser, error) {
 	tr := tar.NewReader(bytes.NewReader(tarBytes))
+
+	var anyCSV []byte
 
 	for {
 		hdr, err := tr.Next()
@@ -191,15 +213,31 @@ func openCSVFromTarBytes(tarBytes []byte) (io.ReadCloser, error) {
 			continue
 		}
 
-		if strings.EqualFold(path.Base(hdr.Name), "data.csv") {
+		base := path.Base(hdr.Name)
 
+		if strings.EqualFold(base, "data.csv") {
 			b, err := io.ReadAll(tr)
 			if err != nil {
 				return nil, errors.New("failed to read data.csv from tar")
 			}
 			return io.NopCloser(bytes.NewReader(b)), nil
 		}
+
+		if anyCSV == nil && strings.HasSuffix(strings.ToLower(base), ".csv") {
+			b, err := io.ReadAll(tr)
+			if err != nil {
+				return nil, errors.New("failed to read csv from tar")
+			}
+			anyCSV = b
+
+			continue
+		}
 	}
+
+	if anyCSV != nil {
+		return io.NopCloser(bytes.NewReader(anyCSV)), nil
+	}
+
 	return nil, errors.New("data.csv not found in archive")
 }
 
