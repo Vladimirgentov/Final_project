@@ -170,7 +170,8 @@ func openCSVFromZipBytes(zipBytes []byte) (io.ReadCloser, error) {
 			continue
 		}
 
-		base := path.Base(f.Name)
+		name := strings.ReplaceAll(f.Name, "\\", "/")
+		base := path.Base(name)
 
 		if strings.EqualFold(base, "data.csv") {
 			rc, err := f.Open()
@@ -213,7 +214,8 @@ func openCSVFromTarBytes(tarBytes []byte) (io.ReadCloser, error) {
 			continue
 		}
 
-		base := path.Base(hdr.Name)
+		name := strings.ReplaceAll(hdr.Name, "\\", "/")
+		base := path.Base(name)
 
 		if strings.EqualFold(base, "data.csv") {
 			b, err := io.ReadAll(tr)
